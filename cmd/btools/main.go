@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+	// TODO: check that the pk is less than the order of the EC
 	// TODO: only allow raw entropy for base 2, 4 and 8
 	rawEntropy := false
 	dice := false
@@ -95,6 +97,12 @@ func main() {
 		panic(err)
 	}
 
+	fmt.Println("Mnemonic seed phrasee: ")
+	for i, m := range mnemonic {
+		fmt.Printf("%d) %s\n", i+1, m)
+	}
+	fmt.Println("")
+
 	seed, err := btools.NewSeed(mnemonic, passphrase)
 	if err != nil {
 		panic(err)
@@ -106,13 +114,13 @@ func main() {
 	}
 	fmt.Println("")
 
-	masterKey, chainCode, err := masterPrivateKey(seed.Seed)
+	masterKeyBytes, chainCode, err := masterPrivateKey(seed.Seed)
 	if err != nil {
 		panic(err)
 	}
 
 	fmt.Print("Master private key: ")
-	for _, b := range masterKey {
+	for _, b := range masterKeyBytes {
 		fmt.Printf("%02x", b)
 	}
 	fmt.Println("")
@@ -123,8 +131,40 @@ func main() {
 	}
 	fmt.Println("")
 
-	masterKeyBase58 := serializeMasterKey(masterKey, chainCode, true, true)
-	fmt.Printf("Master private key: %s\n", masterKeyBase58)
+	masterKey2Base58 := serializeKey(masterKeyBytes, chainCode, true, true, 0, nil, 0)
+	fmt.Printf("Master private key: %s\n", masterKey2Base58)
+
+	masterKey := big.NewInt(0)
+	masterKey.SetBytes(masterKeyBytes)
+	mkPubx, mkPuby := btools.Secp256k1Pub(masterKey)
+	mkPubComp := btools.Secp256k1Compressed(mkPubx, mkPuby)
+	masterKeyPubBase58 := serializeKey(mkPubComp, chainCode, false, true, 0, nil, 0)
+	fmt.Printf("Master public key: %s\n", masterKeyPubBase58)
+
+	index := uint32(42)
+	cPrivateKeyBytes, cChaincode, err := CKDpriv(masterKeyBytes, chainCode, index)
+	if err != nil {
+		panic(err)
+	}
+
+	cKeyBase58 := serializeKey(cPrivateKeyBytes, cChaincode, true, true, 1, masterKeyBytes, index)
+	fmt.Printf("Child private key: %s\n", cKeyBase58)
+
+	childPubx, childPuby, cPubChainCode, err := CKDpubFromPriv(masterKeyBytes, chainCode, index)
+	if err != nil {
+		panic(err)
+	}
+	childPubComp := btools.Secp256k1Compressed(childPubx, childPuby)
+	cPubKeyBase58 := serializeKey(childPubComp, cPubChainCode, false, true, 1, masterKeyBytes, index)
+	fmt.Printf("Child public key: %s\n", cPubKeyBase58)
+
+	childPubx2, childPuby2, cChaincode2, err := CKDpub(mkPubx, mkPuby, chainCode, index)
+	if err != nil {
+		panic(err)
+	}
+	childPub2Comp := btools.Secp256k1Compressed(childPubx2, childPuby2)
+	cPubKey2Base58 := serializeKey(childPub2Comp, cChaincode2, false, true, 1, masterKeyBytes, index)
+	fmt.Printf("Child public key 2: %s\n", cPubKey2Base58)
 }
 
 func masterPrivateKey(seed []byte) ([]byte, []byte, error) {
@@ -156,61 +196,149 @@ func masterPrivateKey(seed []byte) ([]byte, []byte, error) {
 	return il, ir, nil
 }
 
-func serializeMasterKey(key []byte, chaincode []byte, private bool, mainnet bool) string {
-	bytes := make([]byte, 82)
+func serializeKey(key []byte, chaincode []byte, private bool, mainnet bool, depth uint8, parkbytes []byte, i uint32) string {
+	// TODO: validate that depth, parkbytes, i are consistent
+	isMaster := parkbytes == nil
+
+	bytes := []byte{}
 	if !private && mainnet {
-		bytes[0] = 0x04
-		bytes[1] = 0x88
-		bytes[2] = 0xB2
-		bytes[3] = 0x1E
+		bytes = append(bytes, []byte{0x04, 0x88, 0xB2, 0x1E}...)
 	} else if private && mainnet {
-		bytes[0] = 0x04
-		bytes[1] = 0x88
-		bytes[2] = 0xAD
-		bytes[3] = 0xE4
+		bytes = append(bytes, []byte{0x04, 0x88, 0xAD, 0xE4}...)
 	} else if !private && !mainnet {
-		bytes[0] = 0x04
-		bytes[1] = 0x35
-		bytes[2] = 0x87
-		bytes[3] = 0xCF
+		bytes = append(bytes, []byte{0x04, 0x35, 0x87, 0xCF}...)
 	} else if private && !mainnet {
-		bytes[0] = 0x04
-		bytes[1] = 0x35
-		bytes[2] = 0x83
-		bytes[3] = 0x94
+		bytes = append(bytes, []byte{0x04, 0x35, 0x83, 0x94}...)
 	}
 
-	bytes[4] = 0x00
-	bytes[5] = 0x00
-	bytes[6] = 0x00
-	bytes[7] = 0x00
-	bytes[8] = 0x00
-	bytes[9] = 0x00
-	bytes[10] = 0x00
-	bytes[11] = 0x00
-	bytes[12] = 0x00
+	bytes = append(bytes, byte(depth))
 
-	for i, c := range chaincode {
-		bytes[13+i] = c
+	if isMaster {
+		bytes = append(bytes, []byte{0x00, 0x00, 0x00, 0x00}...)
+	} else {
+		park := big.NewInt(0)
+		park.SetBytes(parkbytes)
+		fingerprint := btools.Secp256k1Fingerprint(park)
+		bytes = append(bytes, fingerprint...)
 	}
 
-	idx := 13 + 32
+	bytes = binary.BigEndian.AppendUint32(bytes, i)
+
+	bytes = append(bytes, chaincode...)
+
 	if private {
-		bytes[idx] = 0x00
-		idx++
+		bytes = append(bytes, 0x00)
+	}
+	bytes = append(bytes, key...)
+
+	return Base58Check(bytes)
+}
+
+func CKDpriv(k []byte, c []byte, i uint32) ([]byte, []byte, error) {
+	lim := uint32(1) << 31
+	var data []byte
+	if i >= lim {
+		// If so (hardened child): let I = HMAC-SHA512(Key = cpar, Data = 0x00 || ser256(kpar) || ser32(i)). (Note: The 0x00 pads the private key to make it 33 bytes long.)
+		data = append([]byte{0x00}, k...)
+		data = binary.BigEndian.AppendUint32(data, i)
+	} else {
+		//If not (normal child): let I = HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i)).
+		privk := big.NewInt(0)
+		privk.SetBytes(k)
+		pubx, puby := btools.Secp256k1Pub(privk)
+		data = btools.Secp256k1Compressed(pubx, puby)
+		data = binary.BigEndian.AppendUint32(data, i)
 	}
 
-	for i, c := range key {
-		bytes[idx+i] = c
+	hm := hmac.New(sha512.New, c)
+	hm.Write(data)
+	I := hm.Sum(nil)
+
+	secp256k1Order := big.NewInt(0)
+	secp256k1Order, ok := secp256k1Order.SetString("0XFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0)
+	if !ok {
+		panic("could not parse secp256k1 order")
 	}
 
-	checksum := sha256.Sum256(bytes[:78])
+	Il := I[:32]
+	Ir := I[32:]
+
+	// In case parse256(IL) ≥ n or ki = 0, the resulting key is invalid, and one should proceed with the next value for i. (Note: this has probability lower than 1 in 2127.)
+	kChildNum := big.NewInt(0)
+	kChildNum.SetBytes(Il)
+
+	if kChildNum.Cmp(secp256k1Order) >= 0 {
+		return nil, nil, fmt.Errorf("resulting key is greater than the order of Secp256K1")
+	}
+
+	kParNum := big.NewInt(0)
+	kParNum.SetBytes(k)
+
+	kChildNum.Add(kChildNum, kParNum).Mod(kChildNum, secp256k1Order)
+	if kChildNum.Cmp(big.NewInt(0)) == 0 {
+		return nil, nil, fmt.Errorf("resulting key is 0")
+	}
+
+	return kChildNum.Bytes(), Ir, nil
+}
+
+func CKDpub(pubx, puby *big.Int, c []byte, i uint32) (*big.Int, *big.Int, []byte, error) {
+	lim := uint32(1) << 31
+	var data []byte
+	if i >= lim {
+		return nil, nil, nil, fmt.Errorf("i > %d", lim)
+	}
+
+	// If not (normal child): let I = HMAC-SHA512(Key = cpar, Data = serP(Kpar) || ser32(i)).
+	data = btools.Secp256k1Compressed(pubx, puby)
+	data = binary.BigEndian.AppendUint32(data, i)
+
+	hm := hmac.New(sha512.New, c)
+	hm.Write(data)
+	I := hm.Sum(nil)
+
+	secp256k1Order := big.NewInt(0)
+	secp256k1Order, ok := secp256k1Order.SetString("0XFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0)
+	if !ok {
+		panic("could not parse secp256k1 order")
+	}
+
+	Il := I[:32]
+	Ir := I[32:]
+
+	IlNum := big.NewInt(0)
+	IlNum.SetBytes(Il)
+	if IlNum.Cmp(secp256k1Order) >= 0 {
+		return nil, nil, nil, fmt.Errorf("resulting key is greater than the order of Secp256K1")
+	}
+
+	IlPubx, IlPuby := btools.Secp256k1Pub(IlNum)
+
+	childPubx, childPuby := btools.Secp256k1Add(pubx, puby, IlPubx, IlPuby)
+
+	return childPubx, childPuby, Ir, nil
+}
+
+func CKDpubFromPriv(key []byte, c []byte, i uint32) (*big.Int, *big.Int, []byte, error) {
+	cKeyBytes, cChaincode, err := CKDpriv(key, c, i)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	cKey := big.NewInt(0)
+	cKey.SetBytes(cKeyBytes)
+	cPubx, cPuby := btools.Secp256k1Pub(cKey)
+
+	return cPubx, cPuby, cChaincode, nil
+}
+
+func Base58Check(input []byte) string {
+	bytes := append([]byte{}, input...)
+
+	checksum := sha256.Sum256(input)
 	checksum = sha256.Sum256(checksum[:])
 
-	bytes[78] = checksum[0]
-	bytes[79] = checksum[1]
-	bytes[80] = checksum[2]
-	bytes[81] = checksum[3]
+	bytes = append(bytes, checksum[:4]...)
 
 	zero := big.NewInt(0)
 	n := big.NewInt(0)
@@ -218,15 +346,18 @@ func serializeMasterKey(key []byte, chaincode []byte, private bool, mainnet bool
 
 	base := big.NewInt(58)
 
-	str := make([]byte, 112)
 	base58Symbols := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 	reminder := big.NewInt(0)
-	i := 111
+	builder := strings.Builder{}
 	for n.Cmp(zero) > 0 {
 		n, reminder = n.DivMod(n, base, reminder)
-		str[i] = base58Symbols[int(reminder.Int64())]
-		i--
+		builder.WriteByte(base58Symbols[int(reminder.Int64())])
 	}
 
-	return string(str)
+	runes := []rune(builder.String())
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+
+	return string(runes)
 }
