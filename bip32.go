@@ -33,11 +33,6 @@ func MasterPrivateKey(seed []byte) ([]byte, []byte, error) {
 	ir := hash[32:]
 
 	zero := big.NewInt(0)
-	secp256k1Order := big.NewInt(0)
-	secp256k1Order, ok := secp256k1Order.SetString("0XFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0)
-	if !ok {
-		panic("could not parse secp256k1 order")
-	}
 
 	ilInt := big.NewInt(0)
 	ilInt = ilInt.SetBytes(il)
@@ -112,12 +107,6 @@ func CKDpriv(k []byte, c []byte, i uint32) ([]byte, []byte, error) {
 	hm.Write(data)
 	I := hm.Sum(nil)
 
-	secp256k1Order := big.NewInt(0)
-	secp256k1Order, ok := secp256k1Order.SetString("0XFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0)
-	if !ok {
-		panic("could not parse secp256k1 order")
-	}
-
 	Il := I[:32]
 	Ir := I[32:]
 
@@ -154,12 +143,6 @@ func CKDpub(pub Point, c []byte, i uint32) (Point, []byte, error) {
 	hm := hmac.New(sha512.New, c)
 	hm.Write(data)
 	I := hm.Sum(nil)
-
-	secp256k1Order := big.NewInt(0)
-	secp256k1Order, ok := secp256k1Order.SetString("0XFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0)
-	if !ok {
-		panic("could not parse secp256k1 order")
-	}
 
 	Il := I[:32]
 	Ir := I[32:]
