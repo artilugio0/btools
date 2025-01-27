@@ -136,8 +136,10 @@ func main() {
 
 	masterKey := big.NewInt(0)
 	masterKey.SetBytes(masterKeyBytes)
-	mkPubx, mkPuby := btools.Secp256k1Pub(masterKey)
-	mkPubComp := btools.Secp256k1Compressed(mkPubx, mkPuby)
+
+	mkPub := btools.Secp256k1Pub(masterKey)
+	mkPubComp := btools.Secp256k1Compressed(mkPub)
+
 	masterKeyPubBase58 := serializeKey(mkPubComp, chainCode, false, true, 0, nil, 0)
 	fmt.Printf("Master public key: %s\n", masterKeyPubBase58)
 
@@ -150,19 +152,19 @@ func main() {
 	cKeyBase58 := serializeKey(cPrivateKeyBytes, cChaincode, true, true, 1, masterKeyBytes, index)
 	fmt.Printf("Child private key: %s\n", cKeyBase58)
 
-	childPubx, childPuby, cPubChainCode, err := CKDpubFromPriv(masterKeyBytes, chainCode, index)
+	childPub, cPubChainCode, err := CKDpubFromPriv(masterKeyBytes, chainCode, index)
 	if err != nil {
 		panic(err)
 	}
-	childPubComp := btools.Secp256k1Compressed(childPubx, childPuby)
+	childPubComp := btools.Secp256k1Compressed(childPub)
 	cPubKeyBase58 := serializeKey(childPubComp, cPubChainCode, false, true, 1, masterKeyBytes, index)
 	fmt.Printf("Child public key: %s\n", cPubKeyBase58)
 
-	childPubx2, childPuby2, cChaincode2, err := CKDpub(mkPubx, mkPuby, chainCode, index)
+	childPub2, cChaincode2, err := CKDpub(mkPub, chainCode, index)
 	if err != nil {
 		panic(err)
 	}
-	childPub2Comp := btools.Secp256k1Compressed(childPubx2, childPuby2)
+	childPub2Comp := btools.Secp256k1Compressed(childPub2)
 	cPubKey2Base58 := serializeKey(childPub2Comp, cChaincode2, false, true, 1, masterKeyBytes, index)
 	fmt.Printf("Child public key 2: %s\n", cPubKey2Base58)
 }
@@ -245,8 +247,8 @@ func CKDpriv(k []byte, c []byte, i uint32) ([]byte, []byte, error) {
 		//If not (normal child): let I = HMAC-SHA512(Key = cpar, Data = serP(point(kpar)) || ser32(i)).
 		privk := big.NewInt(0)
 		privk.SetBytes(k)
-		pubx, puby := btools.Secp256k1Pub(privk)
-		data = btools.Secp256k1Compressed(pubx, puby)
+		pub := btools.Secp256k1Pub(privk)
+		data = btools.Secp256k1Compressed(pub)
 		data = binary.BigEndian.AppendUint32(data, i)
 	}
 
@@ -282,15 +284,15 @@ func CKDpriv(k []byte, c []byte, i uint32) ([]byte, []byte, error) {
 	return kChildNum.Bytes(), Ir, nil
 }
 
-func CKDpub(pubx, puby *big.Int, c []byte, i uint32) (*big.Int, *big.Int, []byte, error) {
+func CKDpub(pub btools.Point, c []byte, i uint32) (btools.Point, []byte, error) {
 	lim := uint32(1) << 31
 	var data []byte
 	if i >= lim {
-		return nil, nil, nil, fmt.Errorf("i > %d", lim)
+		return btools.Infinity(), nil, fmt.Errorf("i > %d", lim)
 	}
 
 	// If not (normal child): let I = HMAC-SHA512(Key = cpar, Data = serP(Kpar) || ser32(i)).
-	data = btools.Secp256k1Compressed(pubx, puby)
+	data = btools.Secp256k1Compressed(pub)
 	data = binary.BigEndian.AppendUint32(data, i)
 
 	hm := hmac.New(sha512.New, c)
@@ -309,27 +311,27 @@ func CKDpub(pubx, puby *big.Int, c []byte, i uint32) (*big.Int, *big.Int, []byte
 	IlNum := big.NewInt(0)
 	IlNum.SetBytes(Il)
 	if IlNum.Cmp(secp256k1Order) >= 0 {
-		return nil, nil, nil, fmt.Errorf("resulting key is greater than the order of Secp256K1")
+		return btools.Infinity(), nil, fmt.Errorf("resulting key is greater than the order of Secp256K1")
 	}
 
-	IlPubx, IlPuby := btools.Secp256k1Pub(IlNum)
+	IlPub := btools.Secp256k1Pub(IlNum)
 
-	childPubx, childPuby := btools.Secp256k1Add(pubx, puby, IlPubx, IlPuby)
+	childPub := btools.Secp256k1Add(pub, IlPub)
 
-	return childPubx, childPuby, Ir, nil
+	return childPub, Ir, nil
 }
 
-func CKDpubFromPriv(key []byte, c []byte, i uint32) (*big.Int, *big.Int, []byte, error) {
+func CKDpubFromPriv(key []byte, c []byte, i uint32) (btools.Point, []byte, error) {
 	cKeyBytes, cChaincode, err := CKDpriv(key, c, i)
 	if err != nil {
-		return nil, nil, nil, err
+		return btools.Infinity(), nil, err
 	}
 
 	cKey := big.NewInt(0)
 	cKey.SetBytes(cKeyBytes)
-	cPubx, cPuby := btools.Secp256k1Pub(cKey)
+	cPub := btools.Secp256k1Pub(cKey)
 
-	return cPubx, cPuby, cChaincode, nil
+	return cPub, cChaincode, nil
 }
 
 func Base58Check(input []byte) string {
