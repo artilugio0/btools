@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/big"
 	"os"
 	"strings"
 
@@ -20,6 +19,7 @@ func main() {
 	usePassphrase := false
 	base := 2   // [2, 10]
 	words := 24 // 12 15 18 21 24
+	mainnet := true
 
 	wordsToInputBits := map[int]int{
 		12: 128,
@@ -110,57 +110,52 @@ func main() {
 	}
 	fmt.Println("")
 
-	masterKeyBytes, chainCode, err := btools.MasterPrivateKey(seed.Seed)
+	masterKey, err := btools.MasterPrivateKey(seed)
 	if err != nil {
 		panic(err)
 	}
 
 	fmt.Print("Master private key: ")
-	for _, b := range masterKeyBytes {
+	for _, b := range masterKey.PrivateKey.Bytes() {
 		fmt.Printf("%02x", b)
 	}
 	fmt.Println("")
 
 	fmt.Print("Chain code: ")
-	for _, b := range chainCode {
+	for _, b := range masterKey.ChainCode {
 		fmt.Printf("%02x", b)
 	}
 	fmt.Println("")
 
-	masterKey2Base58 := btools.SerializeKey(masterKeyBytes, chainCode, true, true, 0, nil, 0)
+	masterKey2Base58 := masterKey.SerializeKey(mainnet)
 	fmt.Printf("Master private key: %s\n", masterKey2Base58)
 
-	masterKey := big.NewInt(0)
-	masterKey.SetBytes(masterKeyBytes)
+	masterPublicKey := masterKey.XPubKey()
 
-	mkPub := btools.Secp256k1Pub(masterKey)
-	mkPubComp := btools.Secp256k1Compressed(mkPub)
-
-	masterKeyPubBase58 := btools.SerializeKey(mkPubComp, chainCode, false, true, 0, nil, 0)
+	masterKeyPubBase58 := masterPublicKey.SerializeKey(mainnet)
 	fmt.Printf("Master public key: %s\n", masterKeyPubBase58)
 
 	index := uint32(42)
-	cPrivateKeyBytes, cChaincode, err := btools.CKDpriv(masterKeyBytes, chainCode, index)
+	childXPrivKey, err := masterKey.CKDpriv(index)
 	if err != nil {
 		panic(err)
 	}
 
-	cKeyBase58 := btools.SerializeKey(cPrivateKeyBytes, cChaincode, true, true, 1, masterKeyBytes, index)
+	cKeyBase58 := childXPrivKey.SerializeKey(mainnet)
 	fmt.Printf("Child private key: %s\n", cKeyBase58)
 
-	childPub, cPubChainCode, err := btools.CKDpubFromPriv(masterKeyBytes, chainCode, index)
+	childPub, err := masterKey.CKDpub(index)
 	if err != nil {
 		panic(err)
 	}
-	childPubComp := btools.Secp256k1Compressed(childPub)
-	cPubKeyBase58 := btools.SerializeKey(childPubComp, cPubChainCode, false, true, 1, masterKeyBytes, index)
+	cPubKeyBase58 := childPub.SerializeKey(mainnet)
+
 	fmt.Printf("Child public key: %s\n", cPubKeyBase58)
 
-	childPub2, cChaincode2, err := btools.CKDpub(mkPub, chainCode, index)
+	childPub2, err := masterPublicKey.CKDpub(index)
 	if err != nil {
 		panic(err)
 	}
-	childPub2Comp := btools.Secp256k1Compressed(childPub2)
-	cPubKey2Base58 := btools.SerializeKey(childPub2Comp, cChaincode2, false, true, 1, masterKeyBytes, index)
+	cPubKey2Base58 := childPub2.SerializeKey(mainnet)
 	fmt.Printf("Child public key 2: %s\n", cPubKey2Base58)
 }
